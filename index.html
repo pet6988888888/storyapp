@@ -1,0 +1,357 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Endless Interactive Story</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Inter:wght@400;600&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+        }
+        .story-container {
+            max-width: 800px;
+            margin: 2rem auto;
+            background-color: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.1);
+            padding: 2rem;
+            min-height: 70vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .story-text {
+            font-family: 'Merriweather', serif;
+            line-height: 1.8;
+            color: #333;
+            margin-bottom: 2rem;
+            border-left: 4px solid #4f46e5;
+            padding-left: 1.5rem;
+            min-height: 100px; /* Ensure space is allocated */
+        }
+        .choice-button {
+            transition: all 0.3s ease;
+            transform: translateY(0);
+        }
+        .choice-button:hover {
+            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
+            transform: translateY(-2px);
+        }
+        .loader {
+            border-top-color: #4f46e5;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+
+    <div class="story-container">
+        <h1 class="text-4xl font-bold text-indigo-700 text-center mb-6">The Infinite Chronicle</h1>
+        <p class="text-center text-gray-500 mb-8">Your choices determine the future. What happens next?</p>
+
+
+        <!-- Setup View (Genre Selection) -->
+        <div id="setup-view" class="text-center p-8 flex-grow flex flex-col justify-center items-center">
+            <h2 class="text-2xl font-semibold mb-4 text-indigo-700">Choose Your Chronicle's Genre</h2>
+            <p class="text-gray-600 mb-6 max-w-md">This choice will set the tone and primary source of conflict for your endless, evolving story.</p>
+           
+            <select id="genre-selector" class="w-full md:w-1/2 p-4 border border-gray-300 rounded-xl shadow-lg bg-gray-50 focus:ring-indigo-500 focus:border-indigo-500 text-lg mb-8">
+                <option value="Mystery">Mystery Thriller</option>
+                <option value="Sci-Fi">Sci-Fi Adventure</option>
+                <option value="Romance">Romance Drama</option>
+                <option value="Comedy">Cringe Comedy</option>
+                <option value="Horror">Gothic Horror</option>
+                <option value="Fantasy" selected>Epic Fantasy</option>
+            </select>
+           
+            <button id="start-button" onclick="startStory()" class="w-full md:w-1/2 choice-button bg-green-600 text-white font-bold py-4 px-6 rounded-xl text-xl hover:bg-green-700 transition duration-200 shadow-md">
+                Start the Chronicle
+            </button>
+        </div>
+
+
+        <!-- Game View (Story and Options) -->
+        <div id="game-view" class="hidden flex-grow flex flex-col">
+            <!-- Story Display Area -->
+            <div id="story-display" class="story-text text-lg flex-grow">
+                <!-- Current chapter content will be placed here -->
+            </div>
+
+
+            <!-- Options Container -->
+            <div id="options-container" class="grid grid-cols-1 gap-4 mt-6">
+                <!-- Buttons will be rendered here -->
+            </div>
+        </div>
+
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="hidden text-center mt-8">
+            <div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 mx-auto"></div>
+            <p class="mt-3 text-indigo-600 font-medium">Generating the next chapter...</p>
+        </div>
+
+
+        <!-- Message Box for Errors -->
+        <div id="message-box" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-lg p-6 max-w-sm w-full shadow-2xl">
+                <h3 class="text-xl font-semibold text-red-600 mb-4">Error</h3>
+                <p id="message-content" class="text-gray-700 mb-6"></p>
+                <button onclick="document.getElementById('message-box').classList.add('hidden')"
+                        class="w-full py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transition duration-150">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+    <script type="module">
+        // Configuration for the Gemini API call
+        const apiKey = "";
+        const model = "gemini-2.5-flash-preview-09-2025";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+
+        // DOM elements
+        const setupView = document.getElementById('setup-view');
+        const gameView = document.getElementById('game-view');
+        const storyDisplay = document.getElementById('story-display');
+        const optionsContainer = document.getElementById('options-container');
+        const loadingIndicator = document.getElementById('loading');
+        const messageBox = document.getElementById('message-box');
+        const messageContent = document.getElementById('message-content');
+        const genreSelector = document.getElementById('genre-selector');
+
+
+        // State: The conversation history maintains the entire story context
+        let chatHistory = [];
+        let currentGenre = 'Fantasy'; // Default
+
+
+        // Define the expected structured output from the LLM
+        const responseSchema = {
+            type: "OBJECT",
+            properties: {
+                "storyText": { "type": "STRING", "description": "The next part of the story, 1-2 paragraphs long, written in the third person, continuing the narrative based on the user's choice and the historical context. The text should maintain the tone of the current genre." },
+                "options": {
+                    "type": "ARRAY",
+                    "items": { "type": "STRING" },
+                    "description": "Exactly three unique, compelling, and different choices for the user to make next. These choices must continue the story's development and fit the current genre."
+                }
+            },
+            propertyOrdering: ["storyText", "options"]
+        };
+
+
+        // Base LLM System Instruction
+        const baseSystemPrompt = `You are a world-class, dynamic interactive fiction author. Your task is to continue an open-ended, soap-opera-like narrative.
+        You MUST adhere to these rules:
+        1. Maintain all prior context from the 'chatHistory' to ensure the story evolves naturally.
+        2. Generate 1-2 paragraphs of compelling narrative for 'storyText'.
+        3. ALWAYS generate EXACTLY three unique and distinct choices for 'options'.
+        4. The story must feel like an ongoing drama with complex relationships and evolving conflicts.`;
+
+
+
+
+        /**
+         * Utility function to display a custom error message.
+         * @param {string} message - The message to show.
+         */
+        function showMessage(message) {
+            messageContent.textContent = message;
+            messageBox.classList.remove('hidden');
+        }
+
+
+        /**
+         * Core function to generate the next chapter.
+         * @param {string} userPrompt - The latest prompt (either the initial setup prompt or a user's choice).
+         */
+        async function generateNextChapter(userPrompt) {
+            // Determine the full system prompt including the genre instruction
+            const fullSystemPrompt = baseSystemPrompt + ` The current narrative genre is: ${currentGenre}.`;
+
+
+            // 1. Log the user's input/choice to the history
+            chatHistory.push({
+                role: "user",
+                parts: [{ text: userPrompt }]
+            });
+
+
+            // 2. Prepare the API payload
+            const payload = {
+                contents: chatHistory,
+                systemInstruction: { parts: [{ text: fullSystemPrompt }] },
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: responseSchema
+                },
+            };
+
+
+            // 3. API Call with Exponential Backoff
+            let responseData;
+            const maxRetries = 5;
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+
+                    responseData = await response.json();
+                    break; // Success, break the loop
+
+
+                } catch (error) {
+                    console.error(`Attempt ${i + 1} failed:`, error);
+                    if (i < maxRetries - 1) {
+                        const delay = Math.pow(2, i) * 1000; // Exponential backoff
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    } else {
+                        showMessage("The story generation failed after multiple retries. Please check the console for details.");
+                        loadingIndicator.classList.add('hidden');
+                        return;
+                    }
+                }
+            }
+
+
+            // 4. Process the response
+            loadingIndicator.classList.add('hidden');
+
+
+            try {
+                const candidate = responseData?.candidates?.[0];
+                const jsonText = candidate?.content?.parts?.[0]?.text;
+               
+                if (!jsonText) {
+                    throw new Error("API response was empty or malformed.");
+                }
+
+
+                const storyData = JSON.parse(jsonText);
+                const { storyText, options } = storyData;
+
+
+                if (!storyText || !options || options.length !== 3) {
+                    throw new Error("Model failed to adhere to the required JSON schema (missing storyText or 3 options).");
+                }
+
+
+                // 5. Update history and UI
+                chatHistory.push({
+                    role: "model",
+                    parts: [{ text: storyText }] // Store only the text, not the JSON structure
+                });
+               
+                // Display the new chapter, REPLACING the old one
+                const newChapterHTML = `<p class="text-gray-700">${storyText.replace(/\n/g, '<br>')}</p>`;
+                storyDisplay.innerHTML = newChapterHTML;
+
+
+                // Render the new choices
+                renderOptions(options);
+
+
+            } catch (e) {
+                console.error("Error processing LLM response:", e);
+                showMessage(`Could not process the story response. Error: ${e.message}. The story context may be too long.`);
+                // Provide option to restart on failure
+                optionsContainer.innerHTML = `<button onclick="initApp()" class="choice-button bg-red-500 hover:bg-red-600 text-white font-semibold py-3 px-6 rounded-xl w-full">Restart Story</button>`;
+            }
+        }
+
+
+        /**
+         * Handles the user making a choice.
+         * @param {string} choice - The text of the choice selected by the user.
+         */
+        function handleChoice(choice) {
+            // Disable options and show loading
+            optionsContainer.innerHTML = '';
+            loadingIndicator.classList.remove('hidden');
+
+
+            // The choice becomes the prompt for the next chapter generation
+            generateNextChapter(`I choose: ${choice}. Continue the story from this point.`);
+        }
+
+
+        /**
+         * Renders the interactive buttons for the given choices.
+         * @param {string[]} options - Array of story choices.
+         */
+        function renderOptions(options) {
+            optionsContainer.innerHTML = '';
+            options.forEach(optionText => {
+                const button = document.createElement('button');
+                button.className = 'choice-button bg-indigo-600 text-white font-semibold py-4 px-6 rounded-xl text-lg hover:bg-indigo-700 transition duration-200 shadow-md hover:shadow-lg text-left';
+                button.textContent = optionText;
+                button.onclick = () => handleChoice(optionText);
+                optionsContainer.appendChild(button);
+            });
+        }
+
+
+        /**
+         * Starts the game after genre selection.
+         */
+        window.startStory = async function() {
+            currentGenre = genreSelector.value;
+            chatHistory = []; // Clear history
+
+
+            // Set the initial user prompt based on genre
+            const initialPrompt = `Start an open-ended, dramatic story in the ${currentGenre} genre. The first chapter should introduce the main character and conflict, and end with three distinct choices.`;
+           
+            setupView.classList.add('hidden');
+            gameView.classList.remove('hidden');
+
+
+            // Display loading indicator and remove options while waiting for the first chapter
+            storyDisplay.innerHTML = '<p class="text-gray-500 text-center">Launching the story...</p>';
+            optionsContainer.innerHTML = '';
+            loadingIndicator.classList.remove('hidden');
+           
+            // Generate the first chapter
+            await generateNextChapter(initialPrompt);
+        }
+
+
+        /**
+         * Initializes the application state to show the setup screen.
+         */
+        function initApp() {
+            setupView.classList.remove('hidden');
+            gameView.classList.add('hidden');
+            storyDisplay.innerHTML = '';
+            optionsContainer.innerHTML = '';
+            loadingIndicator.classList.add('hidden');
+        }
+
+
+        // Initialize the app on page load
+        initApp();
+
+
+    </script>
+</body>
+</html>
